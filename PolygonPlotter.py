@@ -9,16 +9,16 @@ import matplotlib.colors as mcolors
 from concurrent.futures import ProcessPoolExecutor
 from tqdm import tqdm
 
+# ---latex installation must
+from matplotlib import rc
+plt.rcParams['text.latex.preamble'] = r'\usepackage{amsfonts}'
+rc('text', usetex=True)
+
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
 os.environ["NUMEXPR_NUM_THREADS"] = "1"
 os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
-
-# ---latex installation must
-from matplotlib import rc
-plt.rcParams['text.latex.preamble'] = r'\usepackage{amsfonts}'
-rc('text', usetex=True)
 
 class PolygonPlotter:
     def __init__(self, L, color_by='vertices', show_com=False, show_cell_number=False,
@@ -81,7 +81,7 @@ class PolygonPlotter:
         elif self.color_by == 'area':
             return r"$A_i$"
         elif self.color_by == 'sigma_xy':
-            return r"$\sigma_i$"
+            return r"$\Sigma_i$"
         elif self.color_by == 'pressure':
             return r"$pressure$"
         else:
@@ -168,24 +168,42 @@ class PolygonPlotter:
                     pad_inches=0.01, dpi=200, facecolor='white')
         plt.close(fig)
 
-    def generate_plots(self, output_dir, num_processes=8):
+    def generate_plots(self, output_dir, num_processes=8, strain_range=None):
+        """
+        If strain_range is (min, max), plot only frames in that strain range.
+        Otherwise, plot all frames.
+        """
         os.makedirs(output_dir, exist_ok=True)
         bounds = (self.global_min, self.global_max, self.xm, self.ym)
+        all_keys = sorted(self.vertex_time_series_data.keys())
+        selected_keys = []
+
+        if strain_range is not None:
+            strain_min, strain_max = strain_range
+            for key in all_keys:
+                time, strain = key
+                if strain_min <= strain <= strain_max:
+                    selected_keys.append(key)
+            if not selected_keys:
+                raise ValueError(f"No frames found in strain range ({strain_min}, {strain_max})!")
+        else:
+            selected_keys = all_keys
+
         args_list = []
-        for i, (time_strain) in enumerate(self.vertex_time_series_data.keys()):
-            vtx_data = self.vertex_time_series_data[time_strain]
-            prop_data = self.property_time_series_data.get(time_strain, [])
-            args_list.append((time_strain[0], time_strain[1], vtx_data, prop_data, i+1, bounds,
+        for i, key in enumerate(selected_keys):
+            vtx_data = self.vertex_time_series_data[key]
+            prop_data = self.property_time_series_data.get(key, [])
+            args_list.append((key[0], key[1], vtx_data, prop_data, i+1, bounds,
                               self.color_by, self.show_com, self.show_cell_number, self.show_blue_box,
                               self.fix_frame, self.plot_vertices_only, output_dir, self.global_normalization,
-                              self.show_tick_labels, self.show_axis_spines))   # <--- 16 args
+                              self.show_tick_labels, self.show_axis_spines))
         with ProcessPoolExecutor(max_workers=num_processes) as pool:
             list(tqdm(pool.map(self.plot_frame, args_list), total=len(args_list), desc="Generating frames"))
 
 # Usage example
 gd = '0.0001'
 en = 'en1'
-output_dir = f"config_figures_gd_{gd}_en_{en}_local_norm_color_latex"
+output_dir = f"config_figures_gd_{gd}_en_{en}_local_norm_color_latexi_in_range"
 os.makedirs(output_dir, exist_ok=True)
 L = 10
 N = L * L
@@ -200,4 +218,10 @@ plotter = PolygonPlotter(L, color_by='sigma_xy',
 
 plotter.parse_time_series_data(f'../gd_{gd}/{en}/data/VertexPositions_N_{N}.dat',
                                f'../gd_{gd}/{en}/data/Cell_propery_N_{N}.dat')
+
+# To plot all frames
 plotter.generate_plots(output_dir, num_processes=4)
+
+# To plot only frames in specific strain range (e.g. from 0.1 to 0.15):
+#plotter.generate_plots(output_dir, num_processes=4, strain_range=(10, 15))
+
