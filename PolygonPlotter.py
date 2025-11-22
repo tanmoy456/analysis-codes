@@ -9,17 +9,21 @@ import matplotlib.colors as mcolors
 from concurrent.futures import ProcessPoolExecutor
 from tqdm import tqdm
 
-import os
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
 os.environ["NUMEXPR_NUM_THREADS"] = "1"
 os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
 
+# ---latex installation must
+from matplotlib import rc
+plt.rcParams['text.latex.preamble'] = r'\usepackage{amsfonts}'
+rc('text', usetex=True)
+
 class PolygonPlotter:
     def __init__(self, L, color_by='vertices', show_com=False, show_cell_number=False,
                  show_blue_box=True, fix_frame=True, plot_vertices_only=False,
-                 global_normalization=True, show_tick_labels=True, show_axis_spines=True):  # added show_tick_labels
+                 global_normalization=True, show_tick_labels=True, show_axis_spines=True):
         self.L = L
         self.N = L * L
         self.hex_len = np.sqrt(2 / (3 * np.sqrt(3)))
@@ -33,7 +37,7 @@ class PolygonPlotter:
         self.plot_vertices_only = plot_vertices_only
         self.global_normalization = global_normalization
         self.show_tick_labels = show_tick_labels
-        self.show_axis_spines = show_axis_spines  # Controls whether to show black border
+        self.show_axis_spines = show_axis_spines
 
     def parse_time_series_data(self, vertex_filename, property_filename):
         self.vertex_time_series_data = self._parse_file(vertex_filename)
@@ -71,8 +75,23 @@ class PolygonPlotter:
                     all_vals.append((row[10] + row[12]) / 2)
         return min(all_vals), max(all_vals)
 
+    def _get_colorbar_label(self):
+        if self.color_by == 'vertices':
+            return r"$\mathrm{sides}$"
+        elif self.color_by == 'area':
+            return r"$A_i$"
+        elif self.color_by == 'sigma_xy':
+            return r"$\sigma_i$"
+        elif self.color_by == 'pressure':
+            return r"$pressure$"
+        else:
+            return self.color_by
+
     def plot_frame(self, args):
-        time, strain, vtx_data, prop_data, frame_number, bounds, color_by, show_com, show_cell_number, show_blue_box, fix_frame, plot_vertices_only, output_dir, global_norm, show_tick_labels = args
+        (time, strain, vtx_data, prop_data, frame_number, bounds, color_by, 
+         show_com, show_cell_number, show_blue_box, fix_frame, 
+         plot_vertices_only, output_dir, global_norm, show_tick_labels, show_axis_spines) = args
+
         fig, ax = plt.subplots(figsize=(8, 6))
         cells = {}
         for row in vtx_data:
@@ -81,7 +100,6 @@ class PolygonPlotter:
                 cells[cell] = []
             cells[cell].append((x, y))
 
-        # Determine normalization range
         if global_norm:
             norm = mcolors.Normalize(vmin=bounds[0], vmax=bounds[1])
         else:
@@ -95,11 +113,8 @@ class PolygonPlotter:
                     values.append(row[11])
                 elif color_by == 'pressure':
                     values.append((row[10] + row[12]) / 2)
-            if values:
-                local_min = min(values)
-                local_max = max(values)
-            else:
-                local_min, local_max = 0, 1  # fallback range
+            local_min = min(values) if values else 0
+            local_max = max(values) if values else 1
             norm = mcolors.Normalize(vmin=local_min, vmax=local_max)
 
         cmap = cm.viridis
@@ -136,17 +151,16 @@ class PolygonPlotter:
         if not plot_vertices_only:
             sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
             sm.set_array([])
-            plt.colorbar(sm, label=color_by.capitalize(), ax=ax, shrink=0.8)
+            label = self._get_colorbar_label()
+            plt.colorbar(sm, label=label, ax=ax, shrink=0.8)
         plt.title(rf'$\gamma = {strain:.6f}$', fontsize=10)
 
-        # Hide or show tick labels
         if not show_tick_labels:
             ax.set_xticklabels([])
             ax.set_yticklabels([])
-            # Also set tick size (major and minor) to zero to remove vertical/horizontal small ticks
             ax.tick_params(axis='both', which='both', length=0)
 
-        if not self.show_axis_spines:
+        if not show_axis_spines:
             for spine in ax.spines.values():
                 spine.set_visible(False)
 
@@ -163,14 +177,15 @@ class PolygonPlotter:
             prop_data = self.property_time_series_data.get(time_strain, [])
             args_list.append((time_strain[0], time_strain[1], vtx_data, prop_data, i+1, bounds,
                               self.color_by, self.show_com, self.show_cell_number, self.show_blue_box,
-                              self.fix_frame, self.plot_vertices_only, output_dir, self.global_normalization, self.show_tick_labels))
+                              self.fix_frame, self.plot_vertices_only, output_dir, self.global_normalization,
+                              self.show_tick_labels, self.show_axis_spines))   # <--- 16 args
         with ProcessPoolExecutor(max_workers=num_processes) as pool:
             list(tqdm(pool.map(self.plot_frame, args_list), total=len(args_list), desc="Generating frames"))
 
 # Usage example
 gd = '0.0001'
 en = 'en1'
-output_dir = f"config_figures_gd_{gd}_en_{en}_local_norm_color"
+output_dir = f"config_figures_gd_{gd}_en_{en}_local_norm_color_latex"
 os.makedirs(output_dir, exist_ok=True)
 L = 10
 N = L * L
@@ -180,8 +195,8 @@ plotter = PolygonPlotter(L, color_by='sigma_xy',
                          show_blue_box=True,
                          fix_frame=True,
                          global_normalization=False,
-                         show_tick_labels=False,   # Hide tick labels
-                         show_axis_spines=False)   # Hide black border
+                         show_tick_labels=False,
+                         show_axis_spines=False)
 
 plotter.parse_time_series_data(f'../gd_{gd}/{en}/data/VertexPositions_N_{N}.dat',
                                f'../gd_{gd}/{en}/data/Cell_propery_N_{N}.dat')
