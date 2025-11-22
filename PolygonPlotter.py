@@ -81,7 +81,7 @@ class PolygonPlotter:
         elif self.color_by == 'area':
             return r"$A_i$"
         elif self.color_by == 'sigma_xy':
-            return r"$\Sigma_i$"
+            return r"$\sigma_i$"
         elif self.color_by == 'pressure':
             return r"$pressure$"
         else:
