@@ -9,7 +9,6 @@ import matplotlib.colors as mcolors
 from concurrent.futures import ProcessPoolExecutor
 from tqdm import tqdm
 
-
 ## --- LaTeX setup ---
 # from matplotlib import rc
 # plt.rcParams['text.latex.preamble'] = r'\usepackage{amsfonts}'
@@ -27,12 +26,17 @@ class PolygonPlotter:
     def __init__(self, L, color_by='vertices', fill_color='colormap',
                  show_com=False, show_cell_number=False, show_blue_box=True,
                  fix_frame=True, plot_vertices_only=False, global_normalization=True,
-                 show_tick_labels=True, show_axis_spines=True, show_title=True):
+                 show_tick_labels=True, show_axis_spines=True,
+                 show_title=True, title_mode='strain'):
         """
         fill_color options:
         - 'colormap': Use colormap based on color_by property
         - 'white': All polygons filled white (black edges only)
         - 'black_vertices': Plot only black vertices, no polygons
+
+        title_mode:
+        - 'strain': title shows gamma only
+        - 'time'  : title shows time only
         """
         self.L = L
         self.N = L * L
@@ -51,6 +55,7 @@ class PolygonPlotter:
         self.show_tick_labels = show_tick_labels
         self.show_axis_spines = show_axis_spines
         self.show_title = show_title
+        self.title_mode = title_mode
 
         self.vertex_time_series_data = {}
         self.property_time_series_data = {}
@@ -95,7 +100,6 @@ class PolygonPlotter:
                 current_strain = float(line.split(":")[1].strip())
                 data[(current_time, current_strain)] = []
             elif line and not line.startswith("#") and current_time is not None:
-                # skip comment/header lines starting with '#'
                 row = [float(x) if i > 0 else int(x)
                        for i, x in enumerate(line.split())]
                 data[(current_time, current_strain)].append(row)
@@ -139,7 +143,7 @@ class PolygonPlotter:
         (time, strain, vtx_data, prop_data, frame_number, bounds, color_by,
          fill_color, show_com, show_cell_number, show_blue_box, fix_frame,
          plot_vertices_only, output_dir, global_norm, show_tick_labels,
-         show_axis_spines, show_title) = args
+         show_axis_spines, show_title, title_mode) = args
 
         fig, ax = plt.subplots(figsize=(8, 6))
         cells = {}
@@ -150,7 +154,7 @@ class PolygonPlotter:
                 cells[cell] = []
             cells[cell].append((x, y))
 
-        # polygons
+        # polygons: colormap / white / black vertices
         if fill_color == 'colormap' and not plot_vertices_only:
             if global_norm:
                 norm = mcolors.Normalize(vmin=bounds[0], vmax=bounds[1])
@@ -203,7 +207,7 @@ class PolygonPlotter:
             points = np.array(all_vertices)
             ax.scatter(points[:, 0], points[:, 1], c='black', s=2)
 
-        # COM & cell numbers (com_x, com_y from property file: columns 2,3)
+        # COM & cell numbers from property file (columns 2,3)
         if (show_com or show_cell_number) and not plot_vertices_only and len(prop_data) > 0:
             for row in prop_data:
                 cell = int(row[0])
@@ -228,8 +232,12 @@ class PolygonPlotter:
             ax.set_xlim(-2, bounds[2] + 2)
             ax.set_ylim(-2, bounds[3] + 2)
 
+        # title
         if show_title:
-            ax.set_title(rf'$\gamma = {strain:.6f}$', fontsize=10)
+            if title_mode == 'strain':
+                ax.set_title(rf'$\gamma = {strain:.6f}$', fontsize=10)
+            elif title_mode == 'time':
+                ax.set_title(rf'$t = {time:.4f}$', fontsize=10)
 
         if not show_tick_labels:
             ax.set_xticklabels([])
@@ -246,15 +254,33 @@ class PolygonPlotter:
 
     # -------- driver --------
 
-    def generate_plots(self, output_dir, num_processes=8, strain_range=None):
+    def generate_plots(self, output_dir, num_processes=8,
+                       strain_range=None, time_range=None):
+        """
+        Use either strain_range or time_range (not both).
+
+        strain_range: (g_min, g_max) on strain = key[1]
+        time_range  : (t_min, t_max) on time = key[0]
+        """
         os.makedirs(output_dir, exist_ok=True)
         bounds = (self.global_min, self.global_max, self.xm, self.ym)
-        all_keys = sorted(self.vertex_time_series_data.keys())
-        selected_keys = all_keys if strain_range is None else \
-            [k for k in all_keys if strain_range[0] <= k[1] <= strain_range[1]]
+        all_keys = sorted(self.vertex_time_series_data.keys())  # (time, strain)
+
+        if strain_range is not None and time_range is not None:
+            raise ValueError("Use either strain_range or time_range, not both.")
+
+        if strain_range is not None:
+            selected_keys = [k for k in all_keys
+                             if strain_range[0] <= k[1] <= strain_range[1]]
+        elif time_range is not None:
+            selected_keys = [k for k in all_keys
+                             if time_range[0] <= k[0] <= time_range[1]]
+        else:
+            selected_keys = all_keys
 
         if not selected_keys:
-            raise ValueError(f"No frames found in strain range {strain_range}!")
+            raise ValueError(f"No frames found for given range: "
+                             f"strain_range={strain_range}, time_range={time_range}")
 
         args_list = []
         for i, key in enumerate(selected_keys):
@@ -268,7 +294,8 @@ class PolygonPlotter:
                  self.show_blue_box, self.fix_frame,
                  self.plot_vertices_only,
                  output_dir, self.global_normalization,
-                 self.show_tick_labels, self.show_axis_spines, self.show_title)
+                 self.show_tick_labels, self.show_axis_spines,
+                 self.show_title, self.title_mode)
             )
 
         with ProcessPoolExecutor(max_workers=num_processes) as pool:
@@ -277,50 +304,63 @@ class PolygonPlotter:
                       desc="Generating frames"))
 
 
-# -------- usage: all three options --------
+# -------- usage examples --------
 
 gd = '0.0001'
 en = 'en1'
 L = 10
 N = L * L
 
-# Option 1: Colormap + COM + cell numbers
+# Option 1: Colormap (area) without ticks/spines, title by strain
 output_dir = f"config_figures_gd_{gd}_en_{en}_colormap"
-
-plotter1 = PolygonPlotter(L, color_by='vertices', fill_color='colormap',
-                          show_com=True, 
-                          show_cell_number=True, 
-                          show_tick_labels=False, 
-                          show_axis_spines=False,
-                          show_title=False)
-
+plotter1 = PolygonPlotter(
+    L,
+    color_by='area',
+    fill_color='colormap',
+    global_normalization = False,
+    show_com=False,
+    show_cell_number=False,
+    show_tick_labels=False,
+    show_axis_spines=False,
+    show_title=True,         # no title for this example
+    title_mode='time'
+)
 plotter1.parse_time_series_data(f'../data/VertexPositions_N_{N}.dat',
                                 f'../data/Cell_propery_N_{N}.dat')
-plotter1.generate_plots(output_dir, num_processes=4)
+plotter1.generate_plots(output_dir, num_processes=120,
+                        strain_range=None, 
+                        # time_range=None,
+                        time_range=(2000.0, 4000.0))
 
-# Option 2: White fill polygons
+# Option 2: White fill, show COM + cell numbers, title by strain/time as you like
 output_dir_white = f"config_figures_gd_{gd}_en_{en}_white_fill"
-
-plotter2 = PolygonPlotter(L, fill_color='white',
-                          show_com=True, 
-                          show_cell_number=True, 
-                          show_tick_labels=False, 
-                          show_axis_spines=False, 
-                          show_title=False)
-
+plotter2 = PolygonPlotter(
+    L,
+    fill_color='white',
+    show_com=True,
+    show_cell_number=True,
+    show_tick_labels=False,
+    show_axis_spines=False,
+    show_title=False,         # no title in this example
+    title_mode='strain'
+)
 plotter2.parse_time_series_data(f'../data/VertexPositions_N_{N}.dat',
                                 f'../data/Cell_propery_N_{N}.dat')
-plotter2.generate_plots(output_dir_white, num_processes=4)
+plotter2.generate_plots(output_dir_white, num_processes=4,
+                        strain_range=None, time_range=None)
 
-# Option 3: Black vertices only
+# Option 3: Black vertices only, vertices only, title by time
 output_dir_vertices = f"config_figures_gd_{gd}_en_{en}_black_vertices"
-
-plotter3 = PolygonPlotter(L, fill_color='black_vertices',
-                          show_com=False, 
-                          show_cell_number=False,
-                          plot_vertices_only=True,
-                          show_title=True)
-
+plotter3 = PolygonPlotter(
+    L,
+    fill_color='black_vertices',
+    show_com=False,
+    show_cell_number=False,
+    plot_vertices_only=True,
+    show_title=True,
+    title_mode='time'
+)
 plotter3.parse_time_series_data(f'../data/VertexPositions_N_{N}.dat',
                                 f'../data/Cell_propery_N_{N}.dat')
-plotter3.generate_plots(output_dir_vertices, num_processes=4)
+plotter3.generate_plots(output_dir_vertices, num_processes=4,
+                        strain_range=None, time_range=None)
