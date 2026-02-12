@@ -76,7 +76,7 @@ class PolygonInertiaCalculator:
         return Ix, Iy, Ixy, area
     
     def compute_aspect_ratio_and_angle(self, Ix, Iy, Ixy):
-        # Use the correct assignment for the inertia tensor
+        # correct assignment for the inertia tensor
         inertia_tensor = np.array([[Iy, Ixy], [Ixy, Ix]])
         eigvals, eigvecs = np.linalg.eigh(inertia_tensor)
         eigvals = np.abs(eigvals)
@@ -145,7 +145,7 @@ class PolygonInertiaCalculator:
         print(f"Max: {np.max(all_aspect_ratios):.4f}")
         print(f"Median: {np.median(all_aspect_ratios):.4f}")
 
-# Usage
+# ***8 Usage ****
 if __name__ == '__main__':
     parent_dir = "AspectRatioResults"
     os.makedirs(parent_dir, exist_ok=True)
