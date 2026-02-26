@@ -12,6 +12,23 @@ def numeric_sort(folder_list, prefix):
     return sorted(folder_list, key=lambda x: float(x.split(prefix)[1]))
 
 
+def build_analysis_root(p0_path, search_path):
+    sim_name = os.path.basename(search_path.rstrip(os.sep))
+    parts = sim_name.split("_")
+
+    kv = {}
+    if len(parts) % 2 == 0:
+        for i in range(0, len(parts), 2):
+            kv[parts[i]] = parts[i + 1]
+
+    if "Dr" in kv and "T" in kv:
+        analysis_name = f"analysis_Dr_{kv['Dr']}_T_{kv['T']}"
+    else:
+        analysis_name = f"analysis_{sim_name}"
+
+    return os.path.join(p0_path, analysis_name)
+
+
 def compute_histogram(data, n_bins=80):
     """Compute geometric-binned histogram."""
     if len(data) == 0:
@@ -180,7 +197,8 @@ def analyze_p0_folder(root_dir, p0_folder, t_start):
 
     v0_folders = numeric_sort(v0_folders, "v0_")
 
-    output_dir = os.path.join(p0_path, "velocity_analysis")
+    analysis_root = build_analysis_root(p0_path, search_path)
+    output_dir = os.path.join(analysis_root, "velocity_analysis")
     os.makedirs(output_dir, exist_ok=True)
 
     summary_data = []

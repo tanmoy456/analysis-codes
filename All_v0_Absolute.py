@@ -25,6 +25,23 @@ def numeric_sort(folder_list, prefix):
     return sorted(folder_list, key=lambda x: float(x.split(prefix)[1]))
 
 
+def build_analysis_root(p0_path, search_path):
+    sim_name = os.path.basename(search_path.rstrip(os.sep))
+    parts = sim_name.split("_")
+
+    kv = {}
+    if len(parts) % 2 == 0:
+        for i in range(0, len(parts), 2):
+            kv[parts[i]] = parts[i + 1]
+
+    if "Dr" in kv and "T" in kv:
+        analysis_name = f"analysis_Dr_{kv['Dr']}_T_{kv['T']}"
+    else:
+        analysis_name = f"analysis_{sim_name}"
+
+    return os.path.join(p0_path, analysis_name)
+
+
 def read_origin_steps(origin_dir, n_origins):
     origin_files = sorted(glob(os.path.join(origin_dir, "origin_*.txt")))
     if not origin_files:
@@ -216,7 +233,8 @@ def analyze_p0_folder(root_dir, p0_folder):
     sim_path = os.path.join(p0_path, "T_0_Dr_0")
     search_path = sim_path if os.path.isdir(sim_path) else p0_path
 
-    output_dir = os.path.join(p0_path, "absolute_displacement_analysis")
+    analysis_root = build_analysis_root(p0_path, search_path)
+    output_dir = os.path.join(analysis_root, "absolute_distance_analysis")
     os.makedirs(output_dir, exist_ok=True)
 
     report_lines = [f"Analysis Report for {p0_folder}\n", f"Search path: {search_path}\n"]
