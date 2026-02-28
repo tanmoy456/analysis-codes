@@ -5,7 +5,7 @@ import os
 import re
 from tqdm import tqdm
 
-# Constants for plot limits (adjust as per your setup)
+# parameters
 L = 10
 N = L * L
 hex_len = np.sqrt(2 / (3 * np.sqrt(3)))
