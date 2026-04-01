@@ -27,7 +27,8 @@ class PolygonPlotter:
                  show_com=False, show_cell_number=False, show_blue_box=True,
                  fix_frame=True, plot_vertices_only=False, global_normalization=True,
                  show_tick_labels=True, show_axis_spines=True,
-                 show_title=True, title_mode='strain', save_dpi=80):
+                 show_title=True, title_mode='strain', save_dpi=80,
+                 periodic_tiling=False, crop_to_box=False):
         """
         fill_color options:
         - 'colormap': Use colormap based on color_by property
@@ -57,6 +58,8 @@ class PolygonPlotter:
         self.show_title = show_title
         self.title_mode = title_mode
         self.save_dpi = save_dpi
+        self.periodic_tiling = periodic_tiling
+        self.crop_to_box = crop_to_box
 
         self.vertex_time_series_data = {}
         self.property_time_series_data = {}
@@ -144,16 +147,33 @@ class PolygonPlotter:
         (time, strain, vtx_data, prop_data, frame_number, bounds, color_by,
          fill_color, show_com, show_cell_number, show_blue_box, fix_frame,
          plot_vertices_only, output_dir, global_norm, show_tick_labels,
-         show_axis_spines, show_title, title_mode, save_dpi) = args
+         show_axis_spines, show_title, title_mode, save_dpi,
+         periodic_tiling, crop_to_box) = args
 
         fig, ax = plt.subplots(figsize=(8, 6))
         cells = {}
+        xlo, xhi = 0.0, bounds[2]
+        ylo, yhi = 0.0, bounds[3]
 
         for row in vtx_data:
             cell, x, y = int(row[0]), row[1], row[2]
             if cell not in cells:
                 cells[cell] = []
             cells[cell].append((x, y))
+
+        if periodic_tiling:
+            shifts = [
+                (-bounds[2], -bounds[3]), (-bounds[2], 0.0), (-bounds[2], bounds[3]),
+                (0.0, -bounds[3]), (0.0, 0.0), (0.0, bounds[3]),
+                (bounds[2], -bounds[3]), (bounds[2], 0.0), (bounds[2], bounds[3]),
+            ]
+        else:
+            shifts = [(0.0, 0.0)]
+
+        def intersects_box(coords):
+            xs = [p[0] for p in coords]
+            ys = [p[1] for p in coords]
+            return not (max(xs) < xlo or min(xs) > xhi or max(ys) < ylo or min(ys) > yhi)
 
         # polygons: colormap / white / black vertices
         if fill_color == 'colormap' and not plot_vertices_only:
@@ -176,14 +196,19 @@ class PolygonPlotter:
                                       4 if color_by == 'area' else
                                       11 if color_by == 'sigma_xy' else
                                       (row[10] + row[12]) / 2]
-                    poly = Polygon(
-                        cells[cell],
-                        closed=True,
-                        edgecolor='black',
-                        facecolor=cmap(norm(color_value)),
-                        linewidth=0.3
-                    )
-                    ax.add_patch(poly)
+                    base_coords = cells[cell]
+                    for dx, dy in shifts:
+                        shifted_coords = [(x + dx, y + dy) for x, y in base_coords]
+                        if periodic_tiling and not intersects_box(shifted_coords):
+                            continue
+                        poly = Polygon(
+                            shifted_coords,
+                            closed=True,
+                            edgecolor='black',
+                            facecolor=cmap(norm(color_value)),
+                            linewidth=0.3
+                        )
+                        ax.add_patch(poly)
 
             sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
             sm.set_array([])
@@ -192,14 +217,19 @@ class PolygonPlotter:
 
         elif fill_color == 'white' and not plot_vertices_only:
             for cell in cells:
-                poly = Polygon(
-                    cells[cell],
-                    closed=True,
-                    facecolor='white',
-                    edgecolor='black',
-                    linewidth=0.5
-                )
-                ax.add_patch(poly)
+                base_coords = cells[cell]
+                for dx, dy in shifts:
+                    shifted_coords = [(x + dx, y + dy) for x, y in base_coords]
+                    if periodic_tiling and not intersects_box(shifted_coords):
+                        continue
+                    poly = Polygon(
+                        shifted_coords,
+                        closed=True,
+                        facecolor='white',
+                        edgecolor='black',
+                        linewidth=0.5
+                    )
+                    ax.add_patch(poly)
 
         elif fill_color == 'black_vertices' or plot_vertices_only:
             all_vertices = []
@@ -229,7 +259,10 @@ class PolygonPlotter:
                     'b-', linewidth=1)
 
         # limits
-        if fix_frame:
+        if crop_to_box:
+            ax.set_xlim(0, bounds[2])
+            ax.set_ylim(0, bounds[3])
+        elif fix_frame:
             ax.set_xlim(-2, bounds[2] + 2)
             ax.set_ylim(-2, bounds[3] + 2)
 
@@ -296,7 +329,8 @@ class PolygonPlotter:
                  self.plot_vertices_only,
                  output_dir, self.global_normalization,
                  self.show_tick_labels, self.show_axis_spines,
-                 self.show_title, self.title_mode, self.save_dpi)
+                 self.show_title, self.title_mode, self.save_dpi,
+                 self.periodic_tiling, self.crop_to_box)
             )
 
         with ProcessPoolExecutor(max_workers=num_processes) as pool:
@@ -310,7 +344,7 @@ if __name__ == "__main__":
 
     prefix = 'v0'
     prefix_value = '0.3'
-    en = 'en3'
+    en = 'en2'
     path = f'../{prefix}_{prefix_value}/{en}/data/'
     # path = f'../data/'     # for testing with existing data
     L = 20
@@ -326,49 +360,53 @@ if __name__ == "__main__":
         global_normalization = False,
         show_com=False,
         show_cell_number=False,
+        show_blue_box=False,
         show_tick_labels=False,
         show_axis_spines=False,
         show_title=True,         # no title for this example
         title_mode='time',
-        save_dpi=100
+        save_dpi=100,
+        periodic_tiling=True, ## with not work with shear system (only for PBC )
+        crop_to_box=True
     )
+
     plotter1.parse_time_series_data(f'{path}/VertexPositions_N_{N}.dat',
                                     f'{path}/Cell_propery_N_{N}.dat')
     plotter1.generate_plots(output_dir, num_processes=8,
                             strain_range=None,
-                            time_range=None,
-                            # time_range=(2000.0, 4000.0)
+                            # time_range=None,
+                            time_range=(300.0, 400.0)
                             )
 
-    ### Option 2: White fill, show COM + cell numbers, title by strain/time as you like
-    output_dir_white = f"config_figures_{prefix}_{prefix_value}_{en}_white_fill"
-    plotter2 = PolygonPlotter(
-        L,
-        fill_color='white',
-        show_com=True,
-        show_cell_number=True,
-        show_tick_labels=False,
-        show_axis_spines=False,
-        show_title=False,         # no title in this example
-        title_mode='strain'
-    )
-    plotter2.parse_time_series_data(f'{path}/VertexPositions_N_{N}.dat',
-                                    f'{path}/Cell_propery_N_{N}.dat')
-    plotter2.generate_plots(output_dir_white, num_processes=4,
-                            strain_range=None, time_range=None)
+    # ### Option 2: White fill, show COM + cell numbers, title by strain/time as you like
+    # output_dir_white = f"config_figures_{prefix}_{prefix_value}_{en}_white_fill"
+    # plotter2 = PolygonPlotter(
+    #     L,
+    #     fill_color='white',
+    #     show_com=True,
+    #     show_cell_number=True,
+    #     show_tick_labels=False,
+    #     show_axis_spines=False,
+    #     show_title=False,         # no title in this example
+    #     title_mode='strain'
+    # )
+    # plotter2.parse_time_series_data(f'{path}/VertexPositions_N_{N}.dat',
+    #                                 f'{path}/Cell_propery_N_{N}.dat')
+    # plotter2.generate_plots(output_dir_white, num_processes=4,
+    #                         strain_range=None, time_range=None)
 
-    ### Option 3: Black vertices only, vertices only, title by time
-    output_dir_vertices = f"config_figures_{prefix}_{prefix_value}_{en}_black_vertices"
-    plotter3 = PolygonPlotter(
-        L,
-        fill_color='black_vertices',
-        show_com=False,
-        show_cell_number=False,
-        plot_vertices_only=True,
-        show_title=True,
-        title_mode='time'
-    )
-    plotter3.parse_time_series_data(f'{path}/VertexPositions_N_{N}.dat',
-                                    f'{path}/Cell_propery_N_{N}.dat')
-    plotter3.generate_plots(output_dir_vertices, num_processes=4,
-                            strain_range=None, time_range=None)
+    # ### Option 3: Black vertices only, vertices only, title by time
+    # output_dir_vertices = f"config_figures_{prefix}_{prefix_value}_{en}_black_vertices"
+    # plotter3 = PolygonPlotter(
+    #     L,
+    #     fill_color='black_vertices',
+    #     show_com=False,
+    #     show_cell_number=False,
+    #     plot_vertices_only=True,
+    #     show_title=True,
+    #     title_mode='time'
+    # )
+    # plotter3.parse_time_series_data(f'{path}/VertexPositions_N_{N}.dat',
+    #                                 f'{path}/Cell_propery_N_{N}.dat')
+    # plotter3.generate_plots(output_dir_vertices, num_processes=4,
+    #                         strain_range=None, time_range=None)
