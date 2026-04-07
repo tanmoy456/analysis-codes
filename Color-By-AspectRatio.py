@@ -22,7 +22,7 @@ class AspectRatioPlotter:
                  fix_frame=True, show_cell_number=False, num_processes=1,
                  show_tick_labels=True, show_axis_spines=True, show_title=True, title_mode='strain',
                  global_normalization=True, periodic_tiling=False, crop_to_box=False,
-                 save_dpi=100):
+                 save_dpi=100, normalization_range=None):
         # Constants for plot limits
         self.L = L
         self.N = L * L
@@ -43,6 +43,7 @@ class AspectRatioPlotter:
         self.periodic_tiling = periodic_tiling
         self.crop_to_box = crop_to_box
         self.save_dpi = save_dpi
+        self.normalization_range = normalization_range
 
         # Data containers
         self.vertex_time_series_data = {}
@@ -205,6 +206,17 @@ class AspectRatioPlotter:
 
     def compute_global_min_max(self):
         """Computes global min and max aspect ratio values across all time steps."""
+        if self.normalization_range is not None:
+            if len(self.normalization_range) != 2:
+                raise ValueError("normalization_range must be a tuple/list of two numbers (min, max).")
+            norm_min, norm_max = float(self.normalization_range[0]), float(self.normalization_range[1])
+            if norm_min >= norm_max:
+                raise ValueError("normalization_range requires min < max.")
+            self.global_min = norm_min
+            self.global_max = norm_max
+            print(f"Using user normalization range: [{self.global_min:.3f}, {self.global_max:.3f}]")
+            return
+
         all_values = []
         for cell_aspect_ratios in self.aspect_ratios.values():
             all_values.extend(cell_aspect_ratios.values())
@@ -262,6 +274,7 @@ class AspectRatioPlotter:
                 'global_min': self.global_min,
                 'global_max': self.global_max,
                 'global_normalization': self.global_normalization,
+                'normalization_range': self.normalization_range,
                 'periodic_tiling': self.periodic_tiling,
                 'crop_to_box': self.crop_to_box,
                 'save_dpi': self.save_dpi,
@@ -301,6 +314,7 @@ def plot_single_frame_aspect(params):
         global_min = params['global_min']
         global_max = params['global_max']
         global_normalization = params['global_normalization']
+        normalization_range = params['normalization_range']
         periodic_tiling = params['periodic_tiling']
         crop_to_box = params['crop_to_box']
         save_dpi = params['save_dpi']
@@ -336,13 +350,17 @@ def plot_single_frame_aspect(params):
         if global_normalization:
             norm = mcolors.Normalize(vmin=global_min, vmax=global_max)
         else:
-            # Frame-local normalization
-            valid_aspects = [aspect_ratio_data.get(cell, np.nan) for cell in cells.keys()]
-            valid_aspects = [v for v in valid_aspects if not np.isnan(v)]
-            if valid_aspects:
-                norm = mcolors.Normalize(vmin=min(valid_aspects), vmax=max(valid_aspects))
+            # Use user-specified range when provided, otherwise frame-local normalization
+            if normalization_range is not None:
+                norm_min, norm_max = float(normalization_range[0]), float(normalization_range[1])
+                norm = mcolors.Normalize(vmin=norm_min, vmax=norm_max)
             else:
-                norm = mcolors.Normalize(vmin=global_min, vmax=global_max)
+                valid_aspects = [aspect_ratio_data.get(cell, np.nan) for cell in cells.keys()]
+                valid_aspects = [v for v in valid_aspects if not np.isnan(v)]
+                if valid_aspects:
+                    norm = mcolors.Normalize(vmin=min(valid_aspects), vmax=max(valid_aspects))
+                else:
+                    norm = mcolors.Normalize(vmin=global_min, vmax=global_max)
 
         cmap = cm.viridis
 
@@ -454,7 +472,7 @@ def plot_single_frame_aspect(params):
 if __name__ == '__main__':
     prefix = 'v0'
     prefix_value = '0.3'
-    en = 'en3'
+    en = 'en1'
     path = f'../{prefix}_{prefix_value}/{en}/data/'
     output_dir = f"aspect_ratio_snapshots_{prefix}_{prefix_value}_{en}"
     os.makedirs(output_dir, exist_ok=True)
@@ -473,6 +491,7 @@ if __name__ == '__main__':
         show_title=True,            # NEW: Hide title
         title_mode='time',         # NEW: Title mode (even if hidden)
         global_normalization=False,
+        normalization_range=(1.0, 5.0),  # Set to None to use data-driven min/max
         periodic_tiling=True,
         crop_to_box=True,
         save_dpi=100,
