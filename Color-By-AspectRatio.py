@@ -13,15 +13,16 @@ import gc
 
 
 ## --- LaTeX setup ---
-from matplotlib import rc
-plt.rcParams['text.latex.preamble'] = r'\usepackage{amsfonts}'
-rc('text', usetex=True)
+#from matplotlib import rc
+#plt.rcParams['text.latex.preamble'] = r'\usepackage{amsfonts}'
+#rc('text', usetex=True)
 
 class AspectRatioPlotter:
-    def __init__(self, L, output_dir='aspect_ratio_figures', show_blue_box=True, 
+    def __init__(self, L, output_dir='aspect_ratio_figures', show_blue_box=True,
                  fix_frame=True, show_cell_number=False, num_processes=1,
                  show_tick_labels=True, show_axis_spines=True, show_title=True, title_mode='strain',
-                 global_normalization=True):
+                 global_normalization=True, periodic_tiling=False, crop_to_box=False,
+                 save_dpi=100):
         # Constants for plot limits
         self.L = L
         self.N = L * L
@@ -39,13 +40,16 @@ class AspectRatioPlotter:
         self.show_title = show_title
         self.title_mode = title_mode
         self.global_normalization = global_normalization
-        
+        self.periodic_tiling = periodic_tiling
+        self.crop_to_box = crop_to_box
+        self.save_dpi = save_dpi
+
         # Data containers
         self.vertex_time_series_data = {}
         self.aspect_ratios = {}
         self.global_min = None
         self.global_max = None
-        
+
         # Number of processes for parallel execution
         self.num_processes = num_processes
 
@@ -85,69 +89,69 @@ class AspectRatioPlotter:
         print(f"Loaded {len(time_series_data)} time steps")
 
     # ... [polygon_centroid, polygon_inertia_centroidal, compute_aspect_ratio, calculate_all_aspect_ratios methods unchanged] ...
-    
+
     def polygon_centroid(self, vertices):
         """Calculate the centroid of a polygon using the shoelace formula."""
         x = vertices[:, 0]
         y = vertices[:, 1]
-        
+
         x_next = np.roll(x, -1)
         y_next = np.roll(y, -1)
-        
+
         cross = x * y_next - x_next * y
         A = 0.5 * np.sum(cross)
-        
+
         if abs(A) < 1e-10:
             return np.mean(x), np.mean(y), 0.0
-        
+
         cx = (1/(6*A)) * np.sum((x + x_next) * cross)
         cy = (1/(6*A)) * np.sum((y + y_next) * cross)
-        
+
         return cx, cy, abs(A)
-    
+
     def polygon_inertia_centroidal(self, vertices):
         """Calculate centroidal moment of inertia using the polygon formula."""
         vertices = np.array(vertices)
-        
+
         # Calculate centroid and area
         cx, cy, area = self.polygon_centroid(vertices)
-        
+
         if area < 1e-10:
             return 0.0, 0.0, 0.0, area
-        
+
         # Shift to centroid frame
         x_cent = vertices[:, 0] - cx
         y_cent = vertices[:, 1] - cy
-        
+
         # Cyclic indexing for closed polygon
         x_cent_next = np.roll(x_cent, -1)
         y_cent_next = np.roll(y_cent, -1)
-        
+
         cross_cent = x_cent * y_cent_next - x_cent_next * y_cent
-        
+
         # Calculate moments of inertia
         Iy = (1/12) * np.sum(cross_cent * (x_cent**2 + x_cent*x_cent_next + x_cent_next**2))
         Ix = (1/12) * np.sum(cross_cent * (y_cent**2 + y_cent*y_cent_next + y_cent_next**2))
         Ixy = (1/24) * np.sum(cross_cent * (x_cent*y_cent_next + 2*x_cent*y_cent + 
                                              2*x_cent_next*y_cent_next + x_cent_next*y_cent))
-        
+
         return Ix, Iy, Ixy, area
-    
+
     def compute_aspect_ratio(self, Ix, Iy, Ixy):
         """Compute aspect ratio from inertia tensor eigenvalues."""
         inertia_tensor = np.array([[Ix, Ixy], [Ixy, Iy]])
-        
+
         eigenvalues = np.linalg.eigvalsh(inertia_tensor)
         eigenvalues = np.abs(eigenvalues)
-        
+
         if eigenvalues[0] < 1e-10:
             return 1.0
-        
+
         lambda_min, lambda_max = np.sort(eigenvalues)
         aspect_ratio = math.sqrt(lambda_max / lambda_min)
-        
+
         return aspect_ratio
-    
+
     def calculate_all_aspect_ratios(self, strain_range=None, time_range=None):
         """Calculate aspect ratios only for selected time/strain range."""
         print("\nCalculating aspect ratios for selected time steps...")
@@ -204,7 +208,7 @@ class AspectRatioPlotter:
         all_values = []
         for cell_aspect_ratios in self.aspect_ratios.values():
             all_values.extend(cell_aspect_ratios.values())
-        
+
         self.global_min = min(all_values)
         self.global_max = max(all_values)
         print(f"Global aspect ratio range: [{self.global_min:.3f}, {self.global_max:.3f}]")
@@ -215,7 +219,7 @@ class AspectRatioPlotter:
         Use either strain_range or time_range (not both).
         """
         self.compute_global_min_max()
-        
+
         # Filter frames by range
         all_keys = sorted(self.vertex_time_series_data.keys())
         if strain_range is not None and time_range is not None:
@@ -231,14 +235,14 @@ class AspectRatioPlotter:
             raise ValueError(f"No frames found for given range: strain_range={strain_range}, time_range={time_range}")
 
         print(f"Generating {len(selected_keys)} frames")
-        
+
         # Prepare all plot parameters upfront
         plot_params_list = []
         for frame_number, key in enumerate(selected_keys, start=1):
             time, strain = key
             vertex_data = self.vertex_time_series_data[key]
             aspect_ratio_data = self.aspect_ratios.get(key, {})
-            
+
             plot_params = {
                 'time': time,
                 'strain': strain,
@@ -258,10 +262,13 @@ class AspectRatioPlotter:
                 'global_min': self.global_min,
                 'global_max': self.global_max,
                 'global_normalization': self.global_normalization,
+                'periodic_tiling': self.periodic_tiling,
+                'crop_to_box': self.crop_to_box,
+                'save_dpi': self.save_dpi,
                 'output_dir': self.output_dir
             }
             plot_params_list.append(plot_params)
-        
+
         # Use ProcessPoolExecutor with standalone function
         with concurrent.futures.ProcessPoolExecutor(max_workers=self.num_processes) as executor:
             list(tqdm(
@@ -294,6 +301,9 @@ def plot_single_frame_aspect(params):
         global_min = params['global_min']
         global_max = params['global_max']
         global_normalization = params['global_normalization']
+        periodic_tiling = params['periodic_tiling']
+        crop_to_box = params['crop_to_box']
+        save_dpi = params['save_dpi']
         output_dir = params['output_dir']
 
         # Create figure
@@ -307,6 +317,20 @@ def plot_single_frame_aspect(params):
                 cells[cell] = {'x': [], 'y': []}
             cells[cell]['x'].append(x)
             cells[cell]['y'].append(y)
+
+        if periodic_tiling:
+            shifts = [
+                (-xm, -ym), (-xm, 0.0), (-xm, ym),
+                (0.0, -ym), (0.0, 0.0), (0.0, ym),
+                (xm, -ym), (xm, 0.0), (xm, ym),
+            ]
+        else:
+            shifts = [(0.0, 0.0)]
+
+        def intersects_box(coords):
+            xs = [p[0] for p in coords]
+            ys = [p[1] for p in coords]
+            return not (max(xs) < 0.0 or min(xs) > xm or max(ys) < 0.0 or min(ys) > ym)
 
         # Set up color mapping (respect global_normalization)
         if global_normalization:
@@ -324,31 +348,38 @@ def plot_single_frame_aspect(params):
 
         # Plot each cell
         for cell, coord_data in cells.items():
-            coords = list(zip(coord_data['x'], coord_data['y']))
-            
+            base_coords = list(zip(coord_data['x'], coord_data['y']))
+
             # Get aspect ratio for this cell
             aspect_ratio = aspect_ratio_data.get(cell, np.nan)
-            
+
             if not np.isnan(aspect_ratio):
                 color = cmap(norm(aspect_ratio))
             else:
                 color = 'gray'  # For cells without aspect ratio
-            
-            polygon = Polygon(coords, closed=True, edgecolor='black', 
-                            facecolor=color, linewidth=0.5)
-            ax.add_patch(polygon)
+
+            for dx, dy in shifts:
+                coords = [(x + dx, y + dy) for x, y in base_coords]
+                if periodic_tiling and not intersects_box(coords):
+                    continue
+                polygon = Polygon(coords, closed=True, edgecolor='black',
+                                facecolor=color, linewidth=0.5)
+                ax.add_patch(polygon)
 
             if show_cell_number:
                 com_x = np.mean(coord_data['x'])
                 com_y = np.mean(coord_data['y'])
-                ax.text(com_x, com_y, str(cell), ha='center', va='center', 
+                ax.text(com_x, com_y, str(cell), ha='center', va='center',
                        fontsize=8, color='white', weight='bold')
 
         # Set axis limits
-        if fix_frame:
+        if crop_to_box:
+            ax.set_xlim(0, xm)
+            ax.set_ylim(0, ym)
+        elif fix_frame:
             ax.set_xlim(0-1.9, xm+1.9)
             ax.set_ylim(0-1.4, ym+1.2)
-        
+
         ax.set_aspect('equal')
 
         # Draw bounding box
@@ -361,7 +392,7 @@ def plot_single_frame_aspect(params):
         sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
         sm.set_array([])
 
-        cbar = plt.colorbar(sm, ax=ax,  #label='Aspect Ratio', 
+        cbar = plt.colorbar(sm, ax=ax,  #label='Aspect Ratio',
                          orientation='horizontal',  # colorbar below instead of side
                          shrink=0.62,      # Shortens LENGTH (vertical size for vertical cbar)
                          aspect=18,        # Controls WIDTH (higher = thinner)
@@ -406,11 +437,11 @@ def plot_single_frame_aspect(params):
 
         # Save to the correct output directory
         output_path = os.path.join(output_dir, f"aspect_ratio_frame_{frame_number:05d}.png")
-        plt.savefig(output_path, dpi=200, bbox_inches="tight", pad_inches=0.01, facecolor='white')
+        plt.savefig(output_path, dpi=save_dpi, bbox_inches="tight", pad_inches=0.01, facecolor='white')
 
     except Exception as e:
         print(f"Error plotting frame {params.get('frame_number', '?')}: {e}")
-    
+
     finally:
         # Always close the figure and force garbage collection
         if fig is not None:
@@ -421,47 +452,50 @@ def plot_single_frame_aspect(params):
 
 # Updated usage example
 if __name__ == '__main__':
-    prefix = 'gd'
-    prefix_val = '0.00001'
+    prefix = 'v0'
+    prefix_value = '0.3'
     en = 'en3'
-    output_dir = f"aspect_ratio_snapshots_{prefix}_{prefix_val}_{en}"
+    path = f'../{prefix}_{prefix_value}/{en}/data/'
+    output_dir = f"aspect_ratio_snapshots_{prefix}_{prefix_value}_{en}"
     os.makedirs(output_dir, exist_ok=True)
 
-    L = 10
+    L = 20
     N = L * L
-    
+
     plotter = AspectRatioPlotter(
-        L=L, 
+        L=L,
         output_dir=output_dir,
-        show_cell_number=False,  
-        show_blue_box=True, 
+        show_cell_number=False,
+        show_blue_box=False,
         fix_frame=True,
         show_tick_labels=False,      # NEW: Hide tick labels
-        show_axis_spines=False,      # NEW: Hide axis spines  
+        show_axis_spines=False,      # NEW: Hide axis spines
         show_title=True,            # NEW: Hide title
-        title_mode='strain',         # NEW: Title mode (even if hidden)
+        title_mode='time',         # NEW: Title mode (even if hidden)
         global_normalization=False,
+        periodic_tiling=True,
+        crop_to_box=True,
+        save_dpi=100,
         num_processes=8
     )
-    
+
     # Parse vertex data
-    plotter.parse_time_series_data(f'../{prefix}_{prefix_val}/{en}/data/VertexPositions_N_{N}.dat')
+    plotter.parse_time_series_data(f'{path}VertexPositions_N_{N}.dat')
 
     # Calculate aspect ratios only in the desired strain window
     plotter.calculate_all_aspect_ratios(
-        strain_range=(0.09, 0.11),
+        # strain_range=(0.09, 0.11),
         # strain_range=(1.01, 1.05),
         # strain_range=(6.0, 7.0),
-        # time_range=(2000.0, 4000.0)
+        time_range=(200.0, 300.0)
     )
-    
+
     # Generate plots with time range (NEW: time_range filtering)
     plotter.generate_plots(
-        strain_range=(0.09, 0.11),
+        #strain_range=(0.09, 0.11),
         # strain_range=(1.01, 1.05),
         # strain_range=(6.0, 6.1),
-        #time_range=(2000.0, 4000.0)  # NEW: Only plot frames in this time window
+        time_range=(200.0, 300.0)  # NEW: Only plot frames in this time window
     )
-    
-    print(f"\nAll plots saved to {output_dir}/")
 
+    print(f"\nAll plots saved to {output_dir}/")
