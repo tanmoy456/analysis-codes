@@ -20,7 +20,12 @@ class T1Analyzer:
                  plot_scatter=True,
                  plot_activity=True,
                  plot_profile=False,
-                 n_per_fig=16):
+                 n_per_fig=16,
+
+                 # NEW
+                 n_time_bins=100,
+                 accumulate=True,
+                 delta_gamma=None):
 
         self.gd = gd
         self.ensembles = ensembles
@@ -37,6 +42,11 @@ class T1Analyzer:
         self.plot_profile = plot_profile
 
         self.n_per_fig = n_per_fig
+
+        # NEW
+        self.n_time_bins = n_time_bins
+        self.accumulate = accumulate
+        self.delta_gamma = delta_gamma
 
         # =========================
         # SYSTEM SIZE
@@ -55,11 +65,6 @@ class T1Analyzer:
         print("Nx, Ny =", self.Nx, self.Ny)
         print("dx, dy =", self.dx, self.dy)
 
-        print("gamma_cut =", self.gamma_cut)
-        print("gamma_max =", self.gamma_max)
-        print("gamma_window =", self.gamma_window)
-
-        # =========================
         self.base_dir = f"plots_gd_{gd}"
         os.makedirs(self.base_dir, exist_ok=True)
 
@@ -84,44 +89,105 @@ class T1Analyzer:
         return activity
 
     # =========================
-    def process_ensemble(self, en):
+    def filter_data(self, gamma, x, y):
 
-        print(f"\nProcessing {en}")
-
-        en_dir = os.path.join(self.base_dir, en)
-        os.makedirs(en_dir, exist_ok=True)
-
-        gamma, x, y = self.load_data(en)
-
-        print("gamma min =", gamma.min(), "gamma max =", gamma.max())
-
-        # ---- apply filters
         mask = gamma >= self.gamma_cut
         if self.gamma_max is not None:
             mask &= (gamma <= self.gamma_max)
 
-        gamma_ss = gamma[mask]
-        x_ss = x[mask]
-        y_ss = y[mask]
+        gamma = gamma[mask]
+        x = x[mask]
+        y = y[mask]
 
-        # =========================
-        # SCATTER FULL
-        # =========================
-        if self.plot_scatter:
+        # boundary safety
+        valid = (x >= 0) & (x <= self.Lx) & (y >= 0) & (y <= self.Ly)
+        return gamma[valid], x[valid], y[valid]
+
+    # =========================
+    def plot_activity_time_series(self, en, gamma, x, y):
+
+        en_dir = os.path.join(self.base_dir, en, "timeseries")
+        os.makedirs(en_dir, exist_ok=True)
+
+        # sort by gamma
+        idx = np.argsort(gamma)
+        gamma = gamma[idx]
+        x = x[idx]
+        y = y[idx]
+
+        gmin = gamma.min()
+        gmax = gamma.max()
+
+        # ---- binning strategy
+        if self.delta_gamma is not None:
+            bins = np.arange(gmin, gmax + self.delta_gamma, self.delta_gamma)
+            n_bins = len(bins) - 1
+        else:
+            n_bins = self.n_time_bins
+            bins = np.linspace(gmin, gmax, n_bins + 1)
+
+        print(f"[{en}] frames={n_bins}, Δγ={(gmax-gmin)/n_bins:.4f}")
+
+        activity_accum = np.zeros((self.Nx, self.Ny))
+
+        # ---- global color scale (important for video consistency)
+        vmax = 0
+
+        temp_fields = []
+
+        for k in range(n_bins):
+
+            g0 = bins[k]
+            g1 = bins[k+1]
+
+            mask_bin = (gamma >= g0) & (gamma < g1)
+
+            if not np.any(mask_bin):
+                temp_fields.append(activity_accum.copy())
+                continue
+
+            activity_bin = self.compute_activity(x[mask_bin], y[mask_bin])
+
+            if self.accumulate:
+                activity_accum += activity_bin
+                field = activity_accum.copy()
+            else:
+                field = activity_bin
+
+            temp_fields.append(field)
+            vmax = max(vmax, field.max())
+
+        # ---- plotting
+        for k, field in enumerate(temp_fields):
+
             plt.figure(figsize=self.figsize)
-            plt.scatter(x_ss, y_ss, s=5)
-            plt.xlim(0, self.Lx)
-            plt.ylim(0, self.Ly)
-            plt.title(f"{en} scatter (full)")
-            plt.savefig(f"{en_dir}/scatter_full.png", dpi=self.dpi)
+            plt.imshow(field.T,
+                       origin='lower',
+                       extent=[0, self.Lx, 0, self.Ly],
+                       vmin=0, vmax=vmax)
+
+            plt.colorbar(label="Accumulated T1 count")
+            plt.title(f"{en} frame {k}")
+
+            plt.savefig(f"{en_dir}/frame_{k:04d}.png", dpi=self.dpi)
             plt.close()
 
-        # =========================
-        # ACTIVITY FULL
-        # =========================
-        activity = self.compute_activity(x_ss, y_ss)
+    # =========================
+    def process_ensemble(self, en):
 
+        print(f"\nProcessing {en}")
+
+        gamma, x, y = self.load_data(en)
+
+        gamma, x, y = self.filter_data(gamma, x, y)
+
+        # ---- FULL activity (optional)
         if self.plot_activity:
+            activity = self.compute_activity(x, y)
+
+            en_dir = os.path.join(self.base_dir, en)
+            os.makedirs(en_dir, exist_ok=True)
+
             plt.figure(figsize=self.figsize)
             plt.imshow(activity.T, origin='lower',
                        extent=[0, self.Lx, 0, self.Ly])
@@ -130,114 +196,14 @@ class T1Analyzer:
             plt.savefig(f"{en_dir}/activity_full.png", dpi=self.dpi)
             plt.close()
 
-        self.activities.append(activity)
-
-        # =========================
-        # WINDOWED SNAPSHOTS
-        # =========================
-        if self.gamma_window is not None:
-
-            g0 = self.gamma_cut
-            gmax = self.gamma_max if self.gamma_max else gamma_ss.max()
-
-            k = 0
-            while g0 < gmax:
-
-                g1 = min(g0 + self.gamma_window, gmax)
-
-                wmask = (gamma >= g0) & (gamma < g1)
-
-                x_w = x[wmask]
-                y_w = y[wmask]
-
-                if len(x_w) == 0:
-                    g0 = g1
-                    continue
-
-                # ---- scatter window
-                if self.plot_scatter:
-                    plt.figure(figsize=self.figsize)
-                    plt.scatter(x_w, y_w, s=5)
-                    plt.xlim(0, self.Lx)
-                    plt.ylim(0, self.Ly)
-                    plt.title(f"{en}: γ [{g0:.2f}, {g1:.2f}]")
-                    plt.savefig(f"{en_dir}/scatter_window_{k}.png",
-                                dpi=self.dpi)
-                    plt.close()
-
-                # ---- activity window
-                activity_w = self.compute_activity(x_w, y_w)
-
-                if self.plot_activity:
-                    plt.figure(figsize=self.figsize)
-                    plt.imshow(activity_w.T, origin='lower',
-                               extent=[0, self.Lx, 0, self.Ly])
-                    plt.colorbar(label="T1 count")
-                    plt.title(f"{en}: γ [{g0:.2f}, {g1:.2f}]")
-                    plt.savefig(f"{en_dir}/activity_window_{k}.png",
-                                dpi=self.dpi)
-                    plt.close()
-
-                k += 1
-                g0 = g1
-
-    # =========================
-    def plot_all_activity_grids(self):
-
-        agg_dir = os.path.join(self.base_dir, "ALL")
-        os.makedirs(agg_dir, exist_ok=True)
-
-        n_total = len(self.activities)
-        n_per_fig = self.n_per_fig
-
-        n_figs = math.ceil(n_total / n_per_fig)
-
-        for f in range(n_figs):
-
-            start = f * n_per_fig
-            end = min((f + 1) * n_per_fig, n_total)
-
-            subset = self.activities[start:end]
-            labels = self.ensembles[start:end]
-
-            ncols = int(np.ceil(np.sqrt(n_per_fig)))
-            nrows = int(np.ceil(len(subset) / ncols))
-
-            fig, axes = plt.subplots(nrows, ncols,
-                                    figsize=(3*ncols, 3*nrows),
-                                    constrained_layout=True)
-
-            axes = np.array(axes).reshape(-1)
-
-            for i, ax in enumerate(axes):
-
-                if i < len(subset):
-
-                    im = ax.imshow(subset[i].T,
-                                   origin='lower',
-                                   extent=[0, self.Lx, 0, self.Ly])
-
-                    ax.set_title(labels[i], fontsize=8)
-                    ax.set_xticks([])
-                    ax.set_yticks([])
-
-                    fig.colorbar(im, ax=ax,
-                                 fraction=0.046,
-                                 pad=0.04)
-                else:
-                    ax.axis('off')
-
-            plt.savefig(f"{agg_dir}/activity_grid_{f}.png",
-                        dpi=self.dpi)
-            plt.close()
+        # ---- TIME SERIES (NEW CORE FEATURE)
+        self.plot_activity_time_series(en, gamma, x, y)
 
     # =========================
     def run(self):
 
         for en in self.ensembles:
             self.process_ensemble(en)
-
-        self.plot_all_activity_grids()
 
 
 # =========================
@@ -253,11 +219,16 @@ if __name__ == "__main__":
         ensembles=ensembles,
         gamma_cut=4.0,
         gamma_max=12.0,
-        gamma_window=2.0,
+
+        # KEY SETTINGS
+        n_time_bins=200,     # number of frames
+        accumulate=True,     # cumulative activity
+
+        # OR use fixed Δγ instead:
+        # delta_gamma=0.1,
+
         factor=1.2,
-        plot_scatter=True,
-        plot_activity=True,
-        n_per_fig=8
+        plot_activity=True
     )
 
     analyzer.run()
